@@ -1,6 +1,6 @@
 import csv, os, time, requests, sys
 API='https://api.hevyapp.com/v1'
-HEAD={'accept':'application/json','api-key':os.environ['HEVY_API_KEY']}
+HEAD={'accept':'application/json','api-key':os.environ['60bdf35b-8b8e-4c3b-8193-3277538c29f5']}
 
 def get(url):
     r = requests.get(url, headers=HEAD, timeout=30)
