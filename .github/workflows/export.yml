@@ -1,6 +1,6 @@
 name: Export Hevy
 on:
-  schedule: [{cron: "5 4 * * *"}]  # ~07:05 Europe/Helsinki
+  schedule: [{cron: "0 21 * * *"}]  # ~07:05 Europe/Helsinki
   workflow_dispatch:
 jobs:
   run:
