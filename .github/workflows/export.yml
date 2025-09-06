@@ -1,0 +1,20 @@
+name: Export Hevy
+on:
+  schedule: [{cron: "5 4 * * *"}]  # ~07:05 Europe/Helsinki
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+      - run: pip install requests
+      - env: { HEVY_API_KEY: ${{ secrets.HEVY_API_KEY }} }
+        run: python export_hevy.py
+      - name: Commit CSV
+        run: |
+          git config user.name "hevy-bot"
+          git config user.email "hevy-bot@example.com"
+          git add out/hevy_sets.csv
+          git commit -m "update csv" || echo "no changes"
+          git push
