@@ -1,9 +1,109 @@
+name: Export Hevy
+
+on:
+  schedule:
+    - cron: '0 21 * * *'   # 00:00 at UTC+3 (Helsinki) = 21:00 UTC previous day (UTC)
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Check secret exists
+        env:
+          HEVY_API_KEY: ${{ secrets.HEVY_API_KEY }}
+        run: |
+          if [ -z "$HEVY_API_KEY" ]; then
+            echo "::error::HEVY_API_KEY is empty or missing"
+            exit 1
+          fi
+          
       - name: Smoke test API (should be 200)
         env:
           HEVY_API_KEY: ${{ secrets.HEVY_API_KEY }}
         run: |
           code=$(curl -s -o /dev/null -w '%{http_code}' \
-                 -H "api-key: $HEVY_API_KEY" -H "accept: application/json" \
+                 -H "api-key: $HEVY_API_KEY" \
+                 -H "accept: application/json" \
                  "https://api.hevyapp.com/v1/workouts?page=1&pageSize=1")
           echo "HTTP $code"
-          [ "$code" -lt 400 ] || (echo "::error::Hevy API returned HTTP $code" && exit 1)
+          if [ "$code" -ge 400 ]; then
+            echo "::error::Hevy API returned HTTP $code. Check API key or account."
+            exit 1
+          fi
+
+      - name: Install deps
+        run: pip install requests
+
+      - name: Export from Hevy API
+        env:
+          HEVY_API_KEY: ${{ secrets.HEVY_API_KEY }}
+        run: |
+          python - <<'PY'
+          import os, csv, time, requests, datetime as dt, sys
+          API='https://api.hevyapp.com/v1'
+          HEAD={'accept':'application/json','api-key':os.environ['HEVY_API_KEY']}
+          SINCE=(dt.datetime.utcnow()-dt.timedelta(days=30)).isoformat()+'Z'
+          PAGE_SIZE=10
+
+          def get(url):
+            r=requests.get(url, headers=HEAD, timeout=30)
+            if r.status_code>=400:
+              print('ERROR', r.status_code, url, file=sys.stderr)
+              print(r.text[:500], file=sys.stderr)
+              r.raise_for_status()
+            return r.json()
+
+          rows=[['workoutId','date','exercise','setIndex','weightKg','reps','rpe','isWarmup']]
+          page=1
+          while True:
+            url=f'{API}/workouts?page={page}&pageSize={PAGE_SIZE}&from={SINCE}'
+            data=get(url)
+            wos=data.get('workouts',[]) or []
+            if not wos:
+              break
+            for w in wos:
+              wd=get(f'{API}/workouts/{w["id"]}')
+              date=wd.get('startedAt') or wd.get('date') or w.get('date')
+              for ex in (wd.get('exercises') or []):
+                name=ex.get('name') or ex.get('exerciseName') or 'Unknown'
+                for i,s in enumerate(ex.get('sets') or [],1):
+                  rows.append([w['id'], date, name, i,
+                               s.get('weightKg') or s.get('weight') or 0,
+                               s.get('reps') or s.get('repetitions') or 0,
+                               s.get('rpe',''),
+                               bool(s.get('isWarmup'))])
+            print(f'Fetched page {page} with {len(wos)} workouts')
+            page+=1
+            time.sleep(0.2)
+            if len(wos) < PAGE_SIZE:
+              break
+
+          os.makedirs('out', exist_ok=True)
+          with open('out/hevy_sets.csv','w',newline='') as f:
+            csv.writer(f).writerows(rows)
+          print(f'Wrote out/hevy_sets.csv with {len(rows)-1} rows')
+          PY
+
+      - name: Commit CSV (if present)
+        run: |
+          if [ -f out/hevy_sets.csv ]; then
+            git config user.name "hevy-bot"
+            git config user.email "hevy-bot@example.com"
+            git add out/hevy_sets.csv
+            git commit -m "update csv" || echo "no changes"
+            git push
+          else
+            echo "::error::out/hevy_sets.csv was not created"
+            exit 1
